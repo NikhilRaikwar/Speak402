@@ -89,6 +89,7 @@ export default function SpendingPolicyPanel({
 
   const hasInsufficientUsdc =
     mode === 'devnet-usdc' && walletUsdcBalance === 0;
+  const activePolicy = policy && !policy.revoked ? policy : null;
 
   return (
     <div className="panel flex flex-col h-full">
@@ -99,7 +100,7 @@ export default function SpendingPolicyPanel({
             Spending Policy
           </h2>
         </div>
-        {policy && !policy.revoked && (
+        {activePolicy && (
           <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-success/10 text-success">
             Active
           </span>
@@ -108,7 +109,7 @@ export default function SpendingPolicyPanel({
 
       <div className="panel-body flex-1 overflow-y-auto space-y-4">
         {/* USDC funding notice */}
-        {hasInsufficientUsdc && !policy && (
+        {hasInsufficientUsdc && !activePolicy && (
           <div className="bg-info/5 border border-info/20 rounded-md p-2.5 text-xs">
             <div className="flex items-start gap-2">
               <Info className="h-3.5 w-3.5 text-info flex-shrink-0 mt-0.5" />
@@ -133,8 +134,13 @@ export default function SpendingPolicyPanel({
           </div>
         )}
 
-        {!policy ? (
+        {!activePolicy ? (
           <div className="space-y-3">
+            {policy?.revoked && (
+              <div className="bg-destructive/5 border border-destructive/20 rounded-md p-3 text-xs text-destructive">
+                Previous policy was revoked. Create a new policy to continue.
+              </div>
+            )}
             <div>
               <Label className="text-xs text-muted-foreground">
                 Per-request cap (USDC)
@@ -205,18 +211,18 @@ export default function SpendingPolicyPanel({
                 <span className="text-muted-foreground">Policy PDA</span>
                 <div className="flex items-center gap-1.5">
                   <span className="font-mono text-foreground">
-                    {truncateAddress(policy.address, 6)}
+                    {truncateAddress(activePolicy.address, 6)}
                   </span>
-                  <CopyButton text={policy.address} field="policy" />
+                  <CopyButton text={activePolicy.address} field="policy" />
                 </div>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground">Escrow Vault</span>
                 <div className="flex items-center gap-1.5">
                   <span className="font-mono text-foreground">
-                    {truncateAddress(policy.escrowVault, 6)}
+                    {truncateAddress(activePolicy.escrowVault, 6)}
                   </span>
-                  <CopyButton text={policy.escrowVault} field="escrow" />
+                  <CopyButton text={activePolicy.escrowVault} field="escrow" />
                 </div>
               </div>
             </div>
@@ -226,19 +232,19 @@ export default function SpendingPolicyPanel({
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Per-request cap</span>
                 <span className="font-semibold text-foreground">
-                  {formatUSDC(policy.perRequestCap)} USDC
+                  {formatUSDC(activePolicy.perRequestCap)} USDC
                 </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Daily cap</span>
                 <span className="font-semibold text-foreground">
-                  {formatUSDC(policy.dailyCap)} USDC
+                  {formatUSDC(activePolicy.dailyCap)} USDC
                 </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Spent today</span>
                 <span className="font-semibold text-foreground">
-                  {formatUSDC(policy.spentToday)} USDC
+                  {formatUSDC(activePolicy.spentToday)} USDC
                 </span>
               </div>
               <div className="flex justify-between">
@@ -250,13 +256,13 @@ export default function SpendingPolicyPanel({
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Expires</span>
                 <span className="text-foreground">
-                  {new Date(policy.expiresAt * 1000).toLocaleString()}
+                  {new Date(activePolicy.expiresAt * 1000).toLocaleString()}
                 </span>
               </div>
             </div>
 
             {/* Deposit */}
-            {!policy.revoked && (
+            {activePolicy && (
               <div>
                 <div className="flex gap-2">
                   <Input
@@ -290,7 +296,7 @@ export default function SpendingPolicyPanel({
             )}
 
             {/* Revoke */}
-            {!policy.revoked && (
+            {activePolicy && (
               <Button
                 onClick={onRevoke}
                 disabled={loading}
@@ -306,11 +312,6 @@ export default function SpendingPolicyPanel({
               </Button>
             )}
 
-            {policy.revoked && (
-              <div className="bg-destructive/5 border border-destructive/20 rounded-md p-3 text-xs text-destructive">
-                Policy has been revoked. Remaining escrow returned.
-              </div>
-            )}
           </div>
         )}
       </div>

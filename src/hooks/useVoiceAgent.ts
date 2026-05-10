@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef } from 'react';
-import { useConversation } from '@elevenlabs/react';
+import { Conversation } from '@elevenlabs/client';
+import type { Conversation as ElevenLabsConversation } from '@elevenlabs/client';
 import type {
   ReceiptState,
   TranscriptEntry,
@@ -8,26 +9,56 @@ import type {
 } from '@/lib/types';
 import {
   ELEVENLABS_AGENT_ID,
-  ELEVENLABS_CONNECTION_TYPE,
   X402_SERVICES,
-  formatUSDC,
 } from '@/lib/constants';
 import { fetchPaidResource, quotePaidResource } from '@/lib/x402';
 
-const SPEAK402_AGENT_PROMPT = `You are Speak402, a voice agent for Solana x402 payments.
+const DIRECT_ELEVENLABS_CONNECTION_TYPE = 'websocket' as const;
+const ENABLE_BROWSER_FALLBACK_TTS = false;
 
-You have access to client tools. Use them. Do not invent merchant names, prices, receipts, or payment status.
+type BrowserSpeechRecognition = {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onresult: ((event: {
+    resultIndex: number;
+    results: ArrayLike<{
+      isFinal: boolean;
+      0: { transcript: string };
+    }>;
+  }) => void) | null;
+  onerror: ((event: { error?: string }) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+};
 
-Rules:
-- If the user asks to list services, call list_x402_services and summarize only those returned services.
-- If the user asks to buy, purchase, quote, unlock, or get a paid resource, call request_resource_quote.
-- Before payment, repeat merchant name, resource name, amount in USDC, and remaining daily allowance.
-- Ask for explicit confirmation before payment.
-- If the user says yes after a quote, call authorize_payment.
-- If the user asks for a receipt, call get_receipt.
-- Never ask the user for merchant name, price, or allowance after a quote. The app provides those values.
-- Never claim payment is complete unless authorize_payment returns paid status.
-- Keep responses short and clear.`;
+declare global {
+  interface WebSocket {
+    __speak402SafeSendPatched?: boolean;
+  }
+
+  interface Window {
+    SpeechRecognition?: new () => BrowserSpeechRecognition;
+    webkitSpeechRecognition?: new () => BrowserSpeechRecognition;
+  }
+}
+
+function installSafeWebSocketSendGuard() {
+  const proto = WebSocket.prototype;
+  if (proto.__speak402SafeSendPatched) return;
+
+  const nativeSend = proto.send;
+  proto.send = function safeSpeak402Send(data: string | ArrayBufferLike | Blob | ArrayBufferView) {
+    if (this.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    return nativeSend.call(this, data);
+  };
+  proto.__speak402SafeSendPatched = true;
+}
 
 type ElevenLabsMessage = {
   source?: string;
@@ -37,6 +68,18 @@ type ElevenLabsMessage = {
 type ElevenLabsMode = {
   mode?: string;
 };
+
+type ElevenLabsStatus = {
+  status?: 'disconnected' | 'connecting' | 'connected' | 'error';
+};
+
+let activeVoiceConversation: ElevenLabsConversation | null = null;
+let activeVoiceStartPromise: Promise<ElevenLabsConversation> | null = null;
+
+function shortHash(value?: string, chars = 8) {
+  if (!value) return undefined;
+  return `${value.slice(0, chars)}...${value.slice(-chars)}`;
+}
 
 interface VoiceAgentTools {
   policy: {
@@ -66,12 +109,33 @@ export function useVoiceAgent(tools?: VoiceAgentTools) {
   const startInFlightRef = useRef(false);
   const sdkSessionActiveRef = useRef(false);
   const textFallbackActiveRef = useRef(false);
+  const conversationRef = useRef<ElevenLabsConversation | null>(null);
   const lastQuoteRef = useRef<X402Quote | null>(null);
   const lastReceiptRef = useRef<ReceiptState | null>(null);
   const paymentInFlightRef = useRef(false);
+  const receiptRequestInFlightRef = useRef<Promise<void> | null>(null);
+  const elevenLabsSessionActiveRef = useRef(false);
   const connectingMessageShownRef = useRef(false);
+  const browserVoiceActiveRef = useRef(false);
+  const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const browserGreetingShownRef = useRef(false);
+  const lastUserTranscriptRef = useRef<{ text: string; timestamp: number } | null>(
+    null
+  );
 
   const isConfigured = Boolean(ELEVENLABS_AGENT_ID);
+
+  const speakText = useCallback((text: string) => {
+    if (!ENABLE_BROWSER_FALLBACK_TTS) return;
+    if (!('speechSynthesis' in window)) return;
+
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1;
+    utterance.pitch = 1;
+    utterance.volume = 1;
+    window.speechSynthesis.speak(utterance);
+  }, []);
 
   const addTranscriptEntry = useCallback(
     (entry: Omit<TranscriptEntry, 'timestamp'>) => {
@@ -79,8 +143,47 @@ export function useVoiceAgent(tools?: VoiceAgentTools) {
         ...prev,
         { ...entry, timestamp: Date.now() },
       ]);
+
+      if (entry.role === 'agent') {
+        speakText(entry.text);
+      }
+    },
+    [speakText]
+  );
+
+  const addSystemEntryOnce = useCallback(
+    (text: string) => {
+      setTranscript((prev) => {
+        if (prev.some((entry) => entry.role === 'system' && entry.text === text)) {
+          return prev;
+        }
+
+        return [
+          ...prev,
+          { role: 'system' as const, text, timestamp: Date.now() },
+        ];
+      });
     },
     []
+  );
+
+  const addUserTranscriptOnce = useCallback(
+    (text: string) => {
+      const normalized = text.trim().toLowerCase();
+      const previous = lastUserTranscriptRef.current;
+      const now = Date.now();
+      if (
+        previous?.text === normalized &&
+        now - previous.timestamp < 2500
+      ) {
+        return false;
+      }
+
+      lastUserTranscriptRef.current = { text: normalized, timestamp: now };
+      addTranscriptEntry({ role: 'user', text });
+      return true;
+    },
+    [addTranscriptEntry]
   );
 
   const getSelectedService = useCallback(
@@ -141,18 +244,6 @@ export function useVoiceAgent(tools?: VoiceAgentTools) {
     const quote = await quotePaidResource(service.id);
     lastQuoteRef.current = quote;
 
-    addTranscriptEntry({
-      role: 'agent',
-      text: `402 quote ready: ${quote.resource} from ${quote.merchant} for ${quote.price} ${quote.token}. Remaining daily allowance is ${formatUSDC(tools?.remainingDailyAllowance ?? 0)}. Say yes or click Confirm & Pay to authorize.`,
-      metadata: {
-        merchant: quote.merchant,
-        resource: quote.resource,
-        price: quote.price,
-        remaining: tools?.remainingDailyAllowance ?? 0,
-        action: 'quote',
-      },
-    });
-
     return {
       status: JSON.stringify({
         merchant: quote.merchant,
@@ -163,7 +254,7 @@ export function useVoiceAgent(tools?: VoiceAgentTools) {
           (tools?.remainingDailyAllowance ?? 0) / 10 ** 6,
       }),
     }.status;
-  }, [addTranscriptEntry, getSelectedService, tools]);
+  }, [getSelectedService, tools]);
 
   const authorizeQuotedPayment = useCallback(async () => {
     if (paymentInFlightRef.current) {
@@ -173,8 +264,10 @@ export function useVoiceAgent(tools?: VoiceAgentTools) {
     if (lastReceiptRef.current) {
       return JSON.stringify({
         status: 'already_paid',
-        receiptAddress: lastReceiptRef.current.address,
-        txSignature: lastReceiptRef.current.txSignature,
+        receipt: shortHash(lastReceiptRef.current.address),
+        transaction: shortHash(lastReceiptRef.current.txSignature),
+        voiceInstruction:
+          'Say the payment is already complete. Do not read full receipt addresses or transaction signatures aloud.',
       });
     }
 
@@ -194,76 +287,108 @@ export function useVoiceAgent(tools?: VoiceAgentTools) {
       throw new Error('The quote is above the remaining daily allowance.');
     }
 
-    paymentInFlightRef.current = true;
-    try {
-      addTranscriptEntry({
-        role: 'agent',
-        text: `Authorizing ${quote.price} ${quote.token} on Solana Devnet...`,
-        metadata: { action: 'payment' },
+    const runPayment = async () => {
+      paymentInFlightRef.current = true;
+      try {
+        addTranscriptEntry({
+          role: 'agent',
+          text: `Wallet confirmation opened for ${quote.price} ${quote.token}. Approve it in Phantom to complete the purchase.`,
+          metadata: { action: 'payment' },
+        });
+
+        const result = await tools.onAuthorizePayment({
+          merchantHash: quote.merchantHash,
+          resourceHash: quote.resourceHash,
+          amount: quote.priceRaw,
+        });
+
+        lastReceiptRef.current = result.receipt;
+        await tools.onMarkFulfilled(result.receipt.address, result.receipt.receiptId);
+        const paid = fetchPaidResource(result.receipt.address, quote.resource);
+
+        addTranscriptEntry({
+          role: 'agent',
+          text: `Payment complete. Receipt ${result.receipt.address.slice(0, 10)}... Tx ${result.txSignature.slice(0, 10)}... ${paid.title} is unlocked. Risk score: ${paid.riskScore}%.`,
+          metadata: { action: 'result' },
+        });
+
+        if (conversationRef.current?.isOpen()) {
+          conversationRef.current.sendContextualUpdate(
+            'Payment status update: the Phantom transaction is complete. The paid resource is unlocked. If the user says yes, done, approved, or asks about status, do not ask whether they approved Phantom again. Say the payment is complete and the receipt and transaction links are visible in the app.'
+          );
+        }
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : 'Payment failed';
+        addTranscriptEntry({
+          role: 'agent',
+          text: `Payment did not complete: ${message}`,
+          metadata: { action: 'error' },
+        });
+      } finally {
+        paymentInFlightRef.current = false;
+        receiptRequestInFlightRef.current = null;
+      }
+    };
+
+    const paymentPromise = runPayment();
+    receiptRequestInFlightRef.current = paymentPromise;
+    if (elevenLabsSessionActiveRef.current) {
+      void paymentPromise;
+      return JSON.stringify({
+        status: 'wallet_confirmation_required',
+        message:
+          'Ask the user to approve the Phantom wallet popup. Do not say payment failed or complete until get_receipt returns a receipt.',
       });
-
-      const result = await tools.onAuthorizePayment({
-        merchantHash: quote.merchantHash,
-        resourceHash: quote.resourceHash,
-        amount: quote.priceRaw,
-      });
-
-      lastReceiptRef.current = result.receipt;
-      await tools.onMarkFulfilled(result.receipt.address, result.receipt.receiptId);
-      const paid = fetchPaidResource(result.receipt.address, quote.resource);
-
-      addTranscriptEntry({
-        role: 'agent',
-        text: `Payment complete. Receipt ${result.receipt.address.slice(0, 10)}... Tx ${result.txSignature.slice(0, 10)}... ${paid.title} is unlocked. Risk score: ${paid.riskScore}%.`,
-        metadata: { action: 'result' },
-      });
-
-      return {
-        status: JSON.stringify({
-          status: 'paid',
-          receiptAddress: result.receipt.address,
-          txSignature: result.txSignature,
-          reportTitle: paid.title,
-          riskScore: paid.riskScore,
-          summary: paid.summary,
-        }),
-      }.status;
-    } finally {
-      paymentInFlightRef.current = false;
     }
+
+    await paymentPromise;
+    const receipt = lastReceiptRef.current;
+    return JSON.stringify({
+      status: receipt ? 'paid' : 'pending',
+      receipt: shortHash(receipt?.address),
+      transaction: shortHash(receipt?.txSignature),
+      voiceInstruction:
+        'If paid, say the payment is complete and the receipt is visible in the app. Do not read full receipt addresses or transaction signatures aloud.',
+    });
   }, [addTranscriptEntry, getSelectedService, tools]);
 
   const describeReceipt = useCallback(() => {
     const receipt = lastReceiptRef.current;
     if (paymentInFlightRef.current) {
-      const message = 'Payment is still being authorized. I will show the receipt as soon as the Solana transaction completes.';
-      addTranscriptEntry({ role: 'agent', text: message });
-      return JSON.stringify({ status: 'pending', message });
+      return JSON.stringify({
+        status: 'pending',
+        message:
+          'Payment is still waiting for Phantom wallet confirmation or Solana finalization.',
+      });
     }
 
     if (!receipt) {
-      const message = 'No voice-authorized receipt yet. Ask for the quote first, then confirm the payment.';
-      addTranscriptEntry({ role: 'agent', text: message });
-      return JSON.stringify({ status: 'not_found', message });
+      return JSON.stringify({
+        status: 'not_found',
+        message: 'No completed voice-authorized receipt yet.',
+      });
     }
 
-    const message = `Receipt: ${receipt.address}. Amount: ${formatUSDC(receipt.amount)} USDC. Transaction: ${receipt.txSignature ?? 'pending'}. Fulfilled: ${receipt.fulfilled ? 'yes' : 'yes'}.`;
-    addTranscriptEntry({ role: 'agent', text: message });
     return JSON.stringify({
       status: 'found',
-      receiptAddress: receipt.address,
+      paymentComplete: true,
+      message:
+        'Payment is complete. The receipt and transaction links are visible in the app.',
+      voiceInstruction:
+        'Do not read the full receipt address or transaction signature aloud. Only say that links are visible in the app.',
+      receipt: shortHash(receipt.address),
       amount: receipt.amount,
-      txSignature: receipt.txSignature,
+      transaction: shortHash(receipt.txSignature),
       fulfilled: true,
     });
-  }, [addTranscriptEntry]);
+  }, []);
 
   const handleVoiceCommand = useCallback(
     async (text: string) => {
       const normalized = text.toLowerCase();
       const asksForReceipt = /\breceipt\b|\btransaction\b|\btx\b/.test(normalized);
       const asksToListServices =
-        /\b(list|show|what|which|available)\b/.test(normalized) &&
+        /^(list|show|what|which|available)$/i.test(text.trim()) ||
         /\b(x402\s*)?(services|resources|apis|catalog)\b/.test(normalized);
       const hasPurchaseIntent =
         /\b(buy|purchase|pay|quote|request|unlock|get|give me|authorize)\b/.test(
@@ -278,8 +403,20 @@ export function useVoiceAgent(tools?: VoiceAgentTools) {
         /^(yes|yeah|yep|confirm|confirmed|pay|authorize|do it|ok|okay)[\s.!]*$/i.test(
           text.trim()
         );
+      const isGreeting =
+        /^(hi|hello|hey|yo|namaste|hii|hiii|hey hello)[\s.!]*$/i.test(
+          text.trim()
+        );
 
       try {
+        if (isGreeting) {
+          addTranscriptEntry({
+            role: 'agent',
+            text: 'Hi, I am Speak402. I can list x402 services, quote a paid resource, and help you authorize a Solana Devnet USDC payment after you confirm.',
+          });
+          return;
+        }
+
         if (asksForReceipt) {
           describeReceipt();
           return;
@@ -295,11 +432,17 @@ export function useVoiceAgent(tools?: VoiceAgentTools) {
           return;
         }
 
-        if (asksForResource && !lastQuoteRef.current) {
+        if (asksForResource) {
           const service = getSelectedService(text);
           tools?.onSelectService?.(service.id);
           await requestResourceQuote({ serviceId: service.id });
+          return;
         }
+
+        addTranscriptEntry({
+          role: 'agent',
+          text: 'I can help with three commands: say “list x402 services”, “buy the Mumbai weather risk report”, or “get my receipt”.',
+        });
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : 'Voice action failed';
         addTranscriptEntry({
@@ -320,68 +463,104 @@ export function useVoiceAgent(tools?: VoiceAgentTools) {
     ]
   );
 
-  const conversation = useConversation({
-    clientTools: {
-      get_spending_policy: () =>
-        JSON.stringify({
-          active: Boolean(tools?.policy && !tools.policy.revoked),
-          perRequestCap: (tools?.policy?.perRequestCap ?? 0) / 10 ** 6,
-          dailyCap: (tools?.policy?.dailyCap ?? 0) / 10 ** 6,
-          spentToday: (tools?.policy?.spentToday ?? 0) / 10 ** 6,
-          remainingDailyAllowance:
-            (tools?.remainingDailyAllowance ?? 0) / 10 ** 6,
-        }),
-      request_resource_quote: requestResourceQuote,
-      authorize_payment: authorizeQuotedPayment,
-      get_receipt: describeReceipt,
-      list_x402_services: listX402Services,
-    },
-    onConnect: () => {
-      sdkSessionActiveRef.current = true;
-      startInFlightRef.current = false;
-      setStatus('listening');
-      setIsSessionActive(true);
-    },
-    onDisconnect: () => {
-      sdkSessionActiveRef.current = false;
-      startInFlightRef.current = false;
-      if (textFallbackActiveRef.current) {
-        setStatus('listening');
-        setIsSessionActive(true);
-        return;
+  const stopBrowserVoice = useCallback(() => {
+    browserVoiceActiveRef.current = false;
+    window.speechSynthesis?.cancel();
+    const recognition = recognitionRef.current;
+    recognitionRef.current = null;
+    if (recognition) {
+      recognition.onend = null;
+      recognition.onerror = null;
+      recognition.onresult = null;
+      try {
+        recognition.stop();
+      } catch {
+        // Already stopped.
       }
-      setStatus('idle');
-      setIsSessionActive(false);
-    },
-    onMessage: (message: ElevenLabsMessage) => {
-      const text = message.message?.trim();
-      if (!text) return;
+    }
+  }, []);
 
-      if (message.source === 'user') {
-        addTranscriptEntry({ role: 'user', text });
-      } else if (message.source === 'ai') {
-        addTranscriptEntry({ role: 'agent', text });
+  const startBrowserVoice = useCallback(() => {
+    browserVoiceActiveRef.current = true;
+
+    const SpeechRecognitionCtor =
+      window.SpeechRecognition ?? window.webkitSpeechRecognition;
+
+    if (!SpeechRecognitionCtor) {
+      addSystemEntryOnce(
+        'Browser speech recognition is not available here. Text commands and spoken replies are still active.'
+      );
+      return;
+    }
+
+    if (recognitionRef.current) return;
+
+    const recognition = new SpeechRecognitionCtor();
+    recognition.continuous = true;
+    recognition.interimResults = false;
+    recognition.lang = 'en-US';
+    recognition.onresult = (event) => {
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+        const result = event.results[i];
+        if (!result?.isFinal) continue;
+        const text = result[0]?.transcript?.trim();
+        if (!text) continue;
+        if (addUserTranscriptOnce(text)) {
+          void handleVoiceCommand(text);
+        }
       }
-    },
-    onError: (error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
-      startInFlightRef.current = false;
-      textFallbackActiveRef.current = true;
-      setStatus('listening');
-      setIsSessionActive(true);
-      addTranscriptEntry({
-        role: 'system',
-        text: `Voice network error: ${message || 'Connection failed'}. Text commands are still active, so you can type the same agent commands.`,
-      });
-    },
-    onModeChange: (mode: ElevenLabsMode) => {
-      if (mode.mode === 'speaking') setStatus('speaking');
-      else if (mode.mode === 'listening') setStatus('listening');
-    },
-  });
+    };
+    recognition.onerror = (event) => {
+      if (event.error === 'no-speech') return;
+      addSystemEntryOnce(
+        `Browser microphone listener paused${event.error ? `: ${event.error}` : ''}. You can still type commands.`
+      );
+    };
+    recognition.onend = () => {
+      recognitionRef.current = null;
+      if (!browserVoiceActiveRef.current) return;
+      window.setTimeout(() => {
+        if (!browserVoiceActiveRef.current || recognitionRef.current) return;
+        startBrowserVoice();
+      }, 300);
+    };
+
+    recognitionRef.current = recognition;
+    try {
+      recognition.start();
+      addSystemEntryOnce('Browser microphone listener is active.');
+      if (!browserGreetingShownRef.current) {
+        browserGreetingShownRef.current = true;
+        addTranscriptEntry({
+          role: 'agent',
+          text: 'Hi, I am Speak402. Tell me what paid resource you want to buy, or say list x402 services.',
+        });
+      }
+    } catch {
+      recognitionRef.current = null;
+    }
+  }, [
+    addSystemEntryOnce,
+    addTranscriptEntry,
+    addUserTranscriptOnce,
+    handleVoiceCommand,
+  ]);
 
   const startSession = useCallback(async () => {
-    if (startInFlightRef.current || isSessionActive || status === 'connecting') {
+    const existingConversation = conversationRef.current ?? activeVoiceConversation;
+    if (
+      startInFlightRef.current ||
+      activeVoiceStartPromise ||
+      existingConversation?.isOpen() ||
+      isSessionActive ||
+      status === 'connecting'
+    ) {
+      if (existingConversation?.isOpen()) {
+        conversationRef.current = existingConversation;
+        sdkSessionActiveRef.current = true;
+        setStatus('listening');
+        setIsSessionActive(true);
+      }
       return;
     }
 
@@ -394,6 +573,7 @@ export function useVoiceAgent(tools?: VoiceAgentTools) {
       // Simulation mode
       setIsSessionActive(true);
       setStatus('listening');
+      startBrowserVoice();
       addTranscriptEntry({
         role: 'agent',
         text: 'Hi, I am Speak402. Tell me what paid resource you want to buy, and I will check it against your wallet-owned spending policy.',
@@ -407,39 +587,123 @@ export function useVoiceAgent(tools?: VoiceAgentTools) {
     }
 
     try {
+      installSafeWebSocketSendGuard();
+
       if (!window.isSecureContext && window.location.hostname !== 'localhost') {
         throw new Error('Microphone access requires HTTPS or localhost.');
       }
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-      });
-      stream.getTracks().forEach((track) => track.stop());
-
       if (!connectingMessageShownRef.current) {
         connectingMessageShownRef.current = true;
-        addTranscriptEntry({
-          role: 'system',
-          text: `Microphone permission granted. Connecting to ElevenLabs via ${ELEVENLABS_CONNECTION_TYPE}...`,
-        });
+        addSystemEntryOnce(
+          'Requesting microphone access and connecting to ElevenLabs voice WebSocket...'
+        );
       }
 
-      await conversation.startSession({
+      activeVoiceStartPromise = Conversation.startSession({
         agentId: ELEVENLABS_AGENT_ID,
-        connectionType: ELEVENLABS_CONNECTION_TYPE,
+        connectionType: DIRECT_ELEVENLABS_CONNECTION_TYPE,
         userId: `speak402-${crypto.randomUUID()}`,
-        overrides: {
-          agent: {
-            prompt: {
-              prompt: SPEAK402_AGENT_PROMPT,
-            },
-            firstMessage:
-              'Hi, I am Speak402. I can list x402 services, quote them against your wallet-owned policy, and help you authorize a Devnet USDC payment.',
-          },
+        clientTools: {
+          get_spending_policy: () =>
+            JSON.stringify({
+              active: Boolean(tools?.policy && !tools.policy.revoked),
+              perRequestCap: (tools?.policy?.perRequestCap ?? 0) / 10 ** 6,
+              dailyCap: (tools?.policy?.dailyCap ?? 0) / 10 ** 6,
+              spentToday: (tools?.policy?.spentToday ?? 0) / 10 ** 6,
+              remainingDailyAllowance:
+                (tools?.remainingDailyAllowance ?? 0) / 10 ** 6,
+            }),
+          request_resource_quote: requestResourceQuote,
+          authorize_payment: authorizeQuotedPayment,
+          get_receipt: describeReceipt,
+          list_x402_services: listX402Services,
+        },
+        onConnect: () => {
+          sdkSessionActiveRef.current = true;
+          elevenLabsSessionActiveRef.current = true;
+          startInFlightRef.current = false;
+          setStatus('listening');
+          setIsSessionActive(true);
+          addSystemEntryOnce(
+            'ElevenLabs voice agent connected. Speak now; custom ElevenLabs voice is active.'
+          );
+        },
+        onDisconnect: () => {
+          conversationRef.current = null;
+          activeVoiceConversation = null;
+          activeVoiceStartPromise = null;
+          sdkSessionActiveRef.current = false;
+          elevenLabsSessionActiveRef.current = false;
+          startInFlightRef.current = false;
+          if (textFallbackActiveRef.current) {
+            setStatus('listening');
+            setIsSessionActive(true);
+            return;
+          }
+          setStatus('idle');
+          setIsSessionActive(false);
+          addSystemEntryOnce(
+            'ElevenLabs realtime audio closed. Start a new session after checking the published agent voice/tool configuration.'
+          );
+        },
+        onMessage: (message: ElevenLabsMessage) => {
+          const text = message.message?.trim();
+          if (!text) return;
+
+          if (message.source === 'user') {
+            if (addUserTranscriptOnce(text) && !elevenLabsSessionActiveRef.current) {
+              void handleVoiceCommand(text);
+            }
+          } else if (message.source === 'ai') {
+            addTranscriptEntry({ role: 'agent', text });
+          }
+        },
+        onError: (error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          conversationRef.current = null;
+          sdkSessionActiveRef.current = false;
+          elevenLabsSessionActiveRef.current = false;
+          startInFlightRef.current = false;
+          textFallbackActiveRef.current = true;
+          setStatus('listening');
+          setIsSessionActive(true);
+          addTranscriptEntry({
+            role: 'system',
+            text: `Voice network error: ${message || 'Connection failed'}. Text commands are still active, so you can type the same agent commands.`,
+          });
+        },
+        onModeChange: (mode: ElevenLabsMode) => {
+          if (mode.mode === 'speaking') setStatus('speaking');
+          else if (mode.mode === 'listening') setStatus('listening');
+        },
+        onStatusChange: (event: ElevenLabsStatus) => {
+          if (event.status === 'connected') {
+            sdkSessionActiveRef.current = true;
+            elevenLabsSessionActiveRef.current = true;
+            return;
+          }
+
+          if (event.status === 'disconnected' || event.status === 'error') {
+            sdkSessionActiveRef.current = false;
+            elevenLabsSessionActiveRef.current = false;
+          }
         },
       });
+
+      const conversation = await activeVoiceStartPromise;
+      activeVoiceConversation = conversation;
+      activeVoiceStartPromise = null;
+      conversationRef.current = conversation;
+      sdkSessionActiveRef.current = true;
+      elevenLabsSessionActiveRef.current = true;
+      startInFlightRef.current = false;
+      setStatus('listening');
+      setIsSessionActive(true);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unknown error';
+      activeVoiceConversation = null;
+      activeVoiceStartPromise = null;
       startInFlightRef.current = false;
       connectingMessageShownRef.current = false;
       setStatus('error');
@@ -456,35 +720,68 @@ export function useVoiceAgent(tools?: VoiceAgentTools) {
     isSessionActive,
     status,
     addTranscriptEntry,
-    conversation,
+    addSystemEntryOnce,
+    handleVoiceCommand,
+    addUserTranscriptOnce,
+    tools,
+    requestResourceQuote,
+    authorizeQuotedPayment,
+    describeReceipt,
+    listX402Services,
+    startBrowserVoice,
   ]);
 
   const endSession = useCallback(async () => {
-    if (sdkSessionActiveRef.current) {
+    stopBrowserVoice();
+    const conversation = conversationRef.current ?? activeVoiceConversation;
+    conversationRef.current = null;
+    activeVoiceConversation = null;
+    activeVoiceStartPromise = null;
+    sdkSessionActiveRef.current = false;
+    elevenLabsSessionActiveRef.current = false;
+    if (conversation) {
       try {
-        conversation.endSession();
+        await conversation.endSession();
       } catch {
         // Session may already be closing after a failed WebRTC negotiation.
       }
-      sdkSessionActiveRef.current = false;
     }
     startInFlightRef.current = false;
     connectingMessageShownRef.current = false;
     textFallbackActiveRef.current = false;
+    browserGreetingShownRef.current = false;
+    lastUserTranscriptRef.current = null;
     setIsSessionActive(false);
     setStatus('idle');
-  }, [conversation]);
+  }, [stopBrowserVoice]);
 
   const sendSimulatedMessage = useCallback(
     (text: string) => {
       addTranscriptEntry({ role: 'user', text });
-      if (sdkSessionActiveRef.current && !textFallbackActiveRef.current) {
-        conversation.sendUserMessage(text);
-        return;
+
+      const canSendToSdk =
+        sdkSessionActiveRef.current &&
+        !textFallbackActiveRef.current &&
+        conversationRef.current?.isOpen();
+
+      if (canSendToSdk) {
+        try {
+          conversationRef.current?.sendUserMessage(text);
+          return;
+        } catch {
+          sdkSessionActiveRef.current = false;
+          elevenLabsSessionActiveRef.current = false;
+          textFallbackActiveRef.current = true;
+          addTranscriptEntry({
+            role: 'system',
+            text: 'ElevenLabs session is closing. Using local text commands for this message.',
+          });
+        }
       }
+
       void handleVoiceCommand(text);
     },
-    [addTranscriptEntry, conversation, handleVoiceCommand]
+    [addTranscriptEntry, handleVoiceCommand]
   );
 
   const addAgentMessage = useCallback(

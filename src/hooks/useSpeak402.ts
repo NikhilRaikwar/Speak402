@@ -315,6 +315,8 @@ export function useSpeak402() {
       if (canUseOnChain && anchorWallet) {
         const txSig = await sdkRevokePolicy(connection, anchorWallet);
         setLastTx(txSig);
+        setPolicy(null);
+        setEscrowBalance({ raw: 0, formatted: '0.00' });
         await refreshState();
         return { txSignature: txSig };
       }
@@ -322,6 +324,8 @@ export function useSpeak402() {
       // Mock fallback
       const result = await mockRevokePolicy();
       setLastTx(result.txSignature);
+      setPolicy(null);
+      setEscrowBalance({ raw: 0, formatted: '0.00' });
       await refreshState();
       return result;
     } catch (err: any) {
