@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+*.log
+vite-dev.log
+.DS_Store
+Thumbs.db
+.playwright-mcp/
+.superstack/
+coverage/
+contracts/logs/
+contracts/target/
