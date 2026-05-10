@@ -108,6 +108,21 @@ Do not put an ElevenLabs API key in a `VITE_` variable. `VITE_` variables are bu
 
 ---
 
+## Vercel Deployment
+
+Speak402 is ready to deploy as a Vite static app on Vercel.
+
+| Setting | Value |
+|---------|-------|
+| Framework Preset | Vite |
+| Build Command | `npm run build` |
+| Output Directory | `dist` |
+| Install Command | `npm install` |
+
+Add the same `VITE_` environment variables from `.env.example` in the Vercel project settings. The included `vercel.json` routes all paths back to `index.html` so browser refreshes work with React Router.
+
+---
+
 ## Getting Devnet USDC
 
 To test with real Devnet USDC payments:
