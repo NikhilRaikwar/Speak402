@@ -7,6 +7,7 @@ import { PhantomWalletAdapter } from '@solana/wallet-adapter-wallets';
 import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
 import { clusterApiUrl } from '@solana/web3.js';
 import { ConversationProvider } from '@elevenlabs/react';
+import { Analytics } from '@vercel/analytics/react';
 import { SOLANA_RPC_URL } from '@/lib/constants';
 import NotFound from './pages/NotFound';
 import Index from './pages/Index';
@@ -33,6 +34,7 @@ const App = () => {
                         </Routes>
                     </ConversationProvider>
                     <Toaster />
+                    <Analytics />
                 </WalletModalProvider>
             </WalletProvider>
         </ConnectionProvider>

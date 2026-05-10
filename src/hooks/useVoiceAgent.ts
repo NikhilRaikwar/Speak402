@@ -420,7 +420,7 @@ export function useVoiceAgent(tools?: VoiceAgentTools) {
         connectingMessageShownRef.current = true;
         addTranscriptEntry({
           role: 'system',
-          text: 'Microphone permission granted. Connecting to ElevenLabs...',
+          text: `Microphone permission granted. Connecting to ElevenLabs via ${ELEVENLABS_CONNECTION_TYPE}...`,
         });
       }
 

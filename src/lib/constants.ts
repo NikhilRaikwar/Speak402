@@ -33,10 +33,10 @@ export const ELEVENLABS_AGENT_ID: string =
   import.meta.env.VITE_ELEVENLABS_AGENT_ID || '';
 
 const configuredElevenLabsConnectionType =
-  import.meta.env.VITE_ELEVENLABS_CONNECTION_TYPE || 'webrtc';
+  import.meta.env.VITE_ELEVENLABS_CONNECTION_TYPE || 'websocket';
 
 export const ELEVENLABS_CONNECTION_TYPE: 'webrtc' | 'websocket' =
-  configuredElevenLabsConnectionType === 'websocket' ? 'websocket' : 'webrtc';
+  configuredElevenLabsConnectionType === 'webrtc' ? 'webrtc' : 'websocket';
 
 // ---------------------------------------------------------------------------
 // SPL Token Program
