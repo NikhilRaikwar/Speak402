@@ -27,8 +27,8 @@ export default function DemoFlow({
   const currentStep = steps.findIndex((s) => !s.done);
 
   return (
-    <div className="panel">
-      <div className="panel-header">
+    <div className="s4d-demo-wrap">
+      <div className="s4d-demo-title">
         <div className="flex items-center gap-2">
           <Zap className="h-4 w-4 text-primary" />
           <h2 className="text-sm font-semibold text-foreground">
@@ -39,18 +39,17 @@ export default function DemoFlow({
           Step {Math.min(currentStep + 1, steps.length)} of {steps.length}
         </span>
       </div>
-      <div className="px-4 py-3">
-        <div className="flex items-center gap-1 overflow-x-auto">
+      <div className="s4d-demo-flow">
           {steps.map((step, i) => (
             <React.Fragment key={i}>
-              <div className="flex items-center gap-1.5 flex-shrink-0">
+              <div className="s4d-flow-step">
                 <div
-                  className={`h-5 w-5 rounded-full flex items-center justify-center text-[10px] font-semibold ${
+                  className={`s4d-flow-circle ${
                     step.done
-                      ? 'bg-primary text-primary-foreground'
+                      ? 's4d-fc-done'
                       : i === currentStep
-                        ? 'bg-foreground text-background'
-                        : 'bg-secondary text-muted-foreground'
+                        ? 's4d-fc-active'
+                        : 's4d-fc-inactive'
                   }`}
                 >
                   {step.done ? (
@@ -60,23 +59,22 @@ export default function DemoFlow({
                   )}
                 </div>
                 <span
-                  className={`text-xs whitespace-nowrap ${
+                  className={`s4d-flow-label ${
                     step.done
-                      ? 'text-primary font-medium'
+                      ? 's4d-flow-label-done'
                       : i === currentStep
-                        ? 'text-foreground font-medium'
-                        : 'text-muted-foreground'
+                        ? 's4d-flow-label-active'
+                        : 's4d-flow-label-inactive'
                   }`}
                 >
                   {step.label}
                 </span>
               </div>
               {i < steps.length - 1 && (
-                <ArrowRight className="h-3 w-3 text-muted-foreground/40 flex-shrink-0 mx-1" />
+                <ArrowRight className="s4d-flow-arrow" />
               )}
             </React.Fragment>
           ))}
-        </div>
       </div>
     </div>
   );

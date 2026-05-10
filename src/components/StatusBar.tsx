@@ -24,20 +24,20 @@ export default function StatusBar({
   const latestReceipt = receipts[0] || null;
 
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+    <div className="s4d-status-row">
       {/* Policy Status */}
-      <div className="panel p-3">
-        <div className="flex items-center gap-2 mb-2">
+      <div className="s4d-status-cell">
+        <div className="s4d-sc-label">
           <FileCheck className="h-3.5 w-3.5 text-muted-foreground" />
-          <span className="stat-label">Policy</span>
+          Policy
         </div>
         {policy ? (
           <div>
             <span
-              className={`text-xs font-semibold px-1.5 py-0.5 rounded ${
+              className={`s4d-sc-chip ${
                 policy.revoked
-                  ? 'bg-destructive/10 text-destructive'
-                  : 'bg-success/10 text-success'
+                  ? 's4d-chip-red'
+                  : 's4d-chip-green'
               }`}
             >
               {policy.revoked ? 'Revoked' : 'Active'}
@@ -52,34 +52,34 @@ export default function StatusBar({
       </div>
 
       {/* Wallet USDC Balance */}
-      <div className="panel p-3">
-        <div className="flex items-center gap-2 mb-2">
+      <div className="s4d-status-cell">
+        <div className="s4d-sc-label">
           <Coins className="h-3.5 w-3.5 text-muted-foreground" />
-          <span className="stat-label">Wallet USDC</span>
+          Wallet USDC
         </div>
-        <p className="stat-value text-xl">{formatUSDC(walletUsdcBalance)}</p>
+        <p className="s4d-sc-value">{formatUSDC(walletUsdcBalance)}</p>
         <p className="text-xs text-muted-foreground mt-0.5">
           {mode === 'devnet-usdc' ? 'Devnet USDC' : 'Mock balance'}
         </p>
       </div>
 
       {/* Escrow Balance */}
-      <div className="panel p-3">
-        <div className="flex items-center gap-2 mb-2">
+      <div className="s4d-status-cell">
+        <div className="s4d-sc-label">
           <Wallet className="h-3.5 w-3.5 text-muted-foreground" />
-          <span className="stat-label">Escrow</span>
+          Escrow
         </div>
-        <p className="stat-value text-xl">{escrowBalance.formatted}</p>
+        <p className="s4d-sc-value">{escrowBalance.formatted}</p>
         <p className="text-xs text-muted-foreground mt-0.5">USDC deposited</p>
       </div>
 
       {/* Daily Remaining */}
-      <div className="panel p-3">
-        <div className="flex items-center gap-2 mb-2">
+      <div className="s4d-status-cell">
+        <div className="s4d-sc-label">
           <DollarSign className="h-3.5 w-3.5 text-muted-foreground" />
-          <span className="stat-label">Daily Remaining</span>
+          Daily Remaining
         </div>
-        <p className="stat-value text-xl">
+        <p className="s4d-sc-value text-primary">
           {policy ? formatUSDC(remainingDailyAllowance) : '—'}
         </p>
         <p className="text-xs text-muted-foreground mt-0.5">
@@ -90,10 +90,10 @@ export default function StatusBar({
       </div>
 
       {/* Latest Receipt */}
-      <div className="panel p-3">
-        <div className="flex items-center gap-2 mb-2">
+      <div className="s4d-status-cell">
+        <div className="s4d-sc-label">
           <Clock className="h-3.5 w-3.5 text-muted-foreground" />
-          <span className="stat-label">Last Receipt</span>
+          Last Receipt
         </div>
         {latestReceipt ? (
           <div>
