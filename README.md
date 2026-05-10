@@ -1,110 +1,319 @@
-# Speak402
+# Speak402 - Voice-Controlled x402 Payments on Solana
 
-**Voice-controlled x402 payments with wallet-owned spending limits on Solana.**
+> **Give voice agents a wallet they cannot overspend.**
 
-Speak402 is a multilingual ElevenLabs voice agent that lets users purchase x402-protected APIs and paid digital resources on Solana, governed by on-chain spending policies written in Rust/Anchor.
+[![Solana Devnet](https://img.shields.io/badge/Solana-Devnet-9945FF?logo=solana)](https://explorer.solana.com/?cluster=devnet)
+[![ElevenLabs](https://img.shields.io/badge/ElevenLabs-Voice%20Agent-F97316)](https://elevenlabs.io)
+[![x402](https://img.shields.io/badge/x402-Payment%20Protocol-14a88a)](https://x402.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Anchor](https://img.shields.io/badge/Anchor-0.30-blue)](https://www.anchor-lang.com/)
 
-## Solana Devnet Program
+Speak402 is a multilingual ElevenLabs voice agent that lets users purchase **x402-protected API resources** on Solana, governed by a **wallet-owned Rust/Anchor spending policy** that no backend can override. Users set per-request caps, daily caps, merchant restrictions, and expiry. The voice agent quotes, confirms, pays, and unlocks paid resources. Every purchase ends with an **auditable on-chain receipt and a clickable Devnet Explorer link**.
+
+---
+
+## Demo
+
+| | |
+|---|---|
+| **Live Demo** | Vercel deployment ready. Add the production URL after deployment. |
+| **Demo Video** | [Watch 3-min walkthrough](#) |
+
+---
+
+## Solana Program
 
 | Item | Value |
 |------|-------|
 | **Program ID** | `CQMQ2Z26ueLm7hNa2rFGADtdLhURSN9MfcUTDqCjkni4` |
 | **Network** | Solana Devnet |
-| **USDC Mint** | `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU` (Devnet USDC) |
+| **USDC Mint** | `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU` |
 | **Framework** | Anchor 0.30 |
+| **Deployment Tx** | `2NsknsxnNVwBrPjtLmZcWA9WEQQjs7XY1EemK2sYdXZEiNp6Bj7UdWgZ55CX9Sd7XuXxUfDqnrqsmfL15k1PAert` |
+| **Explorer** | [View on Solana Explorer](https://explorer.solana.com/address/CQMQ2Z26ueLm7hNa2rFGADtdLhURSN9MfcUTDqCjkni4?cluster=devnet) |
 
 ---
 
-## Why Solana?
+## Architecture
 
-- **Sub-second finality** — voice-agent payments need instant confirmation.
-- **Low fees** — micropayments (e.g. $0.25 for a weather report) are viable.
-- **Program-controlled escrow** — PDA-based token vaults enforce spending caps entirely on-chain, without a custodial backend.
-- **SPL Token standard** — native Devnet USDC support, no bridging required.
+```mermaid
+graph TB
+    subgraph User["User"]
+        PH["Phantom Wallet"]
+        MIC["Microphone / Text Input"]
+    end
+
+    subgraph Frontend["React Frontend (Vite)"]
+        IDX["Index.tsx - Dashboard"]
+        LAND["LandingPage"]
+        SA["useSpeak402 Hook"]
+        VA["useVoiceAgent Hook"]
+        SDK["speak402SDK.ts"]
+        X402["x402.ts - Quote/Fetch"]
+        MOCK["mockProgram.ts"]
+    end
+
+    subgraph ElevenLabs["ElevenLabs Platform"]
+        EL_AGENT["Conversational AI Agent"]
+        STT["Speech-to-Text"]
+        TTS["Text-to-Speech"]
+        TOOLS["Client Tools<br/>list_x402_services<br/>request_resource_quote<br/>authorize_payment<br/>get_receipt<br/>get_spending_policy"]
+    end
+
+    subgraph Solana["Solana Devnet"]
+        PROG["speak402_policy Program<br/>CQMQ2Z26..."]
+        POL["PolicyAccount PDA<br/>seed: policy+owner"]
+        ESC["EscrowVault PDA<br/>seed: escrow+policy"]
+        RCP["MerchantReceipt PDA<br/>seed: receipt+policy+id"]
+        USDC["Devnet USDC Mint<br/>4zMMC9sr..."]
+    end
+
+    subgraph Services["x402 Service Catalog"]
+        WRO["Weather Risk Oracle<br/>0.25 USDC"]
+        DYS["DeFi Yield Screener<br/>0.35 USDC"]
+        WRL["Wallet Risk Lens<br/>0.15 USDC"]
+    end
+
+    MIC -->|speech| STT
+    STT -->|transcript| EL_AGENT
+    EL_AGENT -->|tool calls| TOOLS
+    EL_AGENT -->|spoken response| TTS
+    TOOLS -->|JS callbacks| VA
+    VA -->|commands| SA
+    SA -->|on-chain txns| SDK
+    SDK -->|Anchor RPC| PROG
+    PROG -->|validate policy| POL
+    PROG -->|transfer USDC| ESC
+    ESC -->|pay merchant| USDC
+    PROG -->|create receipt| RCP
+    PH -->|sign txns| SDK
+    SA -->|mock fallback| MOCK
+    VA -->|quote request| X402
+    X402 -->|simulate 402| Services
+    IDX -->|renders| SA
+    IDX -->|renders| VA
+```
+
+### Data Flow: Single Payment
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Agent as ElevenLabs Agent
+    participant App as React App
+    participant SDK as speak402SDK
+    participant Program as Solana Program
+    participant Explorer as Devnet Explorer
+
+    User->>Agent: "Buy the Mumbai weather risk report"
+    Agent->>App: list_x402_services() tool call
+    App-->>Agent: [{id, name, price, domain}]
+    Agent->>App: request_resource_quote({serviceId})
+    App->>App: quotePaidResource() -> 402 response
+    App-->>Agent: {merchant, resource, amount, remaining}
+    Agent->>User: "Quote: 0.25 USDC from Weather Risk Oracle. Remaining: 4.75 USDC. Say yes to confirm."
+    User->>Agent: "Yes, authorize."
+    Agent->>App: authorize_payment() tool call
+    App->>SDK: authorizePayment(merchantHash, resourceHash, amount)
+    SDK->>Program: authorize_payment
+    Program->>Program: validate policy caps and merchant hash
+    Program->>Program: transfer USDC escrow to merchant
+    Program->>Program: create MerchantReceipt PDA
+    SDK-->>App: {txSignature, receiptAddress}
+    App->>SDK: markFulfilled(receiptId)
+    SDK->>Program: mark receipt fulfilled
+    App->>App: fetchPaidResource() -> unlock report
+    App-->>Agent: {riskScore, summary, receiptAddress, txSignature}
+    Agent->>User: "Payment complete. Report is unlocked."
+    App->>Explorer: clickable receipt + tx links
+```
 
 ---
 
-## How ElevenLabs Is Integrated
+## ElevenLabs Integration
 
-Speak402 uses ElevenLabs as the primary interaction layer:
+**Integration path used:** [Deploy Agents](https://elevenlabs.io/docs/agents-platform/overview) + [Transcribe Speech](https://elevenlabs.io/docs/api-reference/speech-to-text/get) + [Generate Speech](https://elevenlabs.io/docs/api-reference/text-to-speech/v-1-text-to-speech-voice-id-stream-input)
 
-| Capability | Integration |
-|------------|-------------|
-| **Deploy Agents** | ElevenLabs Conversational AI agent with custom system prompt for x402 payment flows |
-| **Transcribe Speech** | Real-time speech-to-text via the ElevenLabs WebSocket client |
-| **Generate Speech** | Agent responses are spoken aloud with ElevenLabs text-to-speech |
+| Capability | How Speak402 Uses It |
+|------------|----------------------|
+| **Deploy Agents** | ElevenLabs Conversational AI agent with a strict x402 system prompt |
+| **Transcribe Speech** | Real-time STT via ElevenLabs WebSocket - user voice to text to tool dispatch |
+| **Generate Speech** | Agent spoken responses: quote readback, confirmation prompt, report summary |
+| **Client Tools** | 5 registered tools: `list_x402_services`, `request_resource_quote`, `authorize_payment`, `get_receipt`, `get_spending_policy` |
 
-**Agent behavior:**
-1. Greets the user and asks what paid resource they want to buy.
-2. Calls `quotePaidResource` to fetch the 402 quote.
-3. Reads back: merchant, resource, amount, per-request cap, remaining daily allowance.
-4. Waits for explicit user confirmation before proceeding.
-5. After payment, reads the unlocked report summary aloud.
+### Agent Behavior Contract
 
-If ElevenLabs credentials are not configured, the app falls back to a text-based simulation mode (clearly labeled).
+1. Greets user and asks what paid resource they want.
+2. Calls `list_x402_services` and summarizes available catalog.
+3. Calls `request_resource_quote(serviceId)` to fetch the 402 response.
+4. Reads back: merchant, resource, amount, and remaining daily allowance.
+5. **Waits for explicit voice confirmation** before proceeding.
+6. Calls `authorize_payment`, which triggers Phantom signing.
+7. After payment, reads the unlocked report summary aloud.
+8. Calls `get_receipt` on request and returns the receipt address and tx signature.
 
----
+**Fallback:** If ElevenLabs credentials are absent, the app runs in text simulation mode. All agent tool logic still executes via typed commands.
 
-## How x402 Is Integrated
+**System prompt excerpt:**
 
-The x402 protocol defines a payment-required resource pattern:
-
-1. **402 Response** — The Weather Risk Oracle returns a `402 Payment Required` response containing:
-   - `merchant`: Weather Risk Oracle
-   - `resource`: Mumbai Weather Risk Report
-   - `amount`: 0.25 USDC
-   - `network`: Solana Devnet
-   - `token`: USDC
-   - `mint`: `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`
-
-2. **On-chain payment** — The Solana program validates the spending policy and transfers USDC from escrow to the merchant, creating a `MerchantReceipt` PDA.
-
-3. **Resource unlock** — The merchant verifies the on-chain receipt and returns the paid report data.
+```text
+You are Speak402, a voice agent for Solana x402 payments.
+Use tools. Do not invent merchant names, prices, or payment status.
+Before payment, repeat: merchant, resource, amount, remaining allowance.
+Ask for explicit confirmation. Never claim payment is complete unless
+authorize_payment returns paid status.
+```
 
 ---
 
-## Solana Program Overview
+## x402 Protocol Integration
 
-**Program name:** `speak402_policy`
+The x402 protocol defines a payment-required resource pattern for the open web:
 
-### Accounts
-- **PolicyAccount** (PDA: `["policy", owner]`) — Per-user spending policy with caps, merchant restriction, expiry
-- **EscrowVault** (PDA: `["escrow", policy]`) — SPL token account holding deposited USDC
-- **MerchantReceipt** (PDA: `["receipt", policy, receipt_id]`) — Immutable payment receipt
+```text
+Client -> GET /resource
+Server <- 402 Payment Required + {merchant, resource, amount, network, token, mint}
+Client -> pay on-chain -> receipt PDA created
+Server <- verify receipt -> return resource
+```
+
+**Speak402 implements all four steps:**
+
+1. **402 Response** - `quotePaidResource()` returns the structured 402 object with merchant hash, resource hash, price, USDC mint, and network.
+2. **On-chain payment** - Anchor program validates spending policy and transfers USDC from escrow PDA to merchant, creating a `MerchantReceipt` PDA.
+3. **Receipt verification** - `markFulfilled()` marks the receipt PDA as fulfilled on-chain.
+4. **Resource unlock** - `fetchPaidResource()` simulates the merchant verifying the receipt and returning the paid report.
+
+**x402 Service Catalog:**
+
+| Service | Resource | Price |
+|---------|----------|-------|
+| Weather Risk Oracle | Mumbai Weather Risk Report | $0.25 USDC |
+| DeFi Yield Screener | Solana Stable Yield Snapshot | $0.35 USDC |
+| Wallet Risk Lens | Counterparty Wallet Risk Brief | $0.15 USDC |
+
+---
+
+## Solana Program - `speak402_policy`
+
+### Account Model
+
+```text
+PolicyAccount (PDA: ["policy", owner_pubkey])
+├── owner: Pubkey
+├── escrow_vault: Pubkey
+├── per_request_cap: u64
+├── daily_cap: u64
+├── spent_today: u64
+├── allowed_merchant_hash: [u8; 32]
+├── expires_at: i64
+└── revoked: bool
+
+EscrowVault (PDA: ["escrow", policy_pubkey])
+└── SPL TokenAccount holding deposited USDC
+
+MerchantReceipt (PDA: ["receipt", policy_pubkey, receipt_id_le8])
+├── policy: Pubkey
+├── owner: Pubkey
+├── merchant_hash: [u8; 32]
+├── resource_hash: [u8; 32]
+├── amount: u64
+├── timestamp: i64
+└── fulfilled: bool
+```
 
 ### Instructions
+
 | Instruction | Description |
 |-------------|-------------|
-| `initialize_config` | Create policy with per-request cap, daily cap, allowed merchant hash, expiry |
-| `deposit` | Transfer USDC from user wallet into escrow vault |
-| `authorize_payment` | Validate policy rules, transfer from escrow, create receipt |
+| `initialize_config` | Create policy with caps, merchant hash, expiry, init escrow vault |
+| `deposit` | Transfer USDC from user ATA into escrow PDA |
+| `authorize_payment` | Validate all policy rules, transfer USDC, create receipt |
 | `mark_fulfilled` | Mark receipt as fulfilled after resource delivery |
 | `revoke_policy` | Revoke policy and return remaining escrow to owner |
 
 ### Error Codes
-`Unauthorized` · `PolicyRevoked` · `PolicyExpired` · `MerchantNotAllowed` · `PerRequestCapExceeded` · `DailyCapExceeded` · `InsufficientEscrow` · `ZeroDeposit` · `AlreadyFulfilled` · `MathOverflow` · `InvalidMint` · `InvalidEscrow`
+
+`Unauthorized` | `PolicyRevoked` | `PolicyExpired` | `MerchantNotAllowed` | `PerRequestCapExceeded` | `DailyCapExceeded` | `InsufficientEscrow` | `ZeroDeposit` | `AlreadyFulfilled` | `MathOverflow` | `InvalidMint` | `InvalidEscrow`
+
+### Security Properties
+
+- **Checked arithmetic** - All on-chain math uses checked arithmetic.
+- **PDA authority** - Escrow vault is owned by a program-derived address; only the program can transfer out.
+- **Owner-only** - Only the policy owner can authorize payments, deposit, or revoke.
+- **Merchant restriction** - Payment is rejected if merchant SHA-256 hash does not match.
+- **Daily reset** - `spent_today` resets after 86400s from `reset_timestamp`.
+- **Explicit confirmation** - Agent always reads the full quote and waits for user confirmation before preparing any transaction.
 
 ---
 
-## Environment Variables
+## Test Suite
 
-Create a `.env` file in the project root:
+The Anchor test suite covers:
+
+```text
+speak402_policy
+  - initializes policy config successfully
+  - deposits tokens into escrow vault
+  - rejects zero deposit
+  - authorizes a payment and creates receipt
+  - rejects payment exceeding per-request cap
+  - rejects payment with wrong merchant hash
+  - marks receipt as fulfilled
+  - rejects marking already fulfilled receipt
+  - tracks cumulative daily spending correctly
+  - rejects payment that would exceed daily cap
+  - revokes policy and returns remaining escrow tokens
+  - rejects payment on revoked policy
+  - rejects deposit from unauthorized user
+```
+
+---
+
+## Local Setup
+
+### Prerequisites
+
+- Node.js 18+
+- Phantom wallet in Devnet mode
+- Devnet SOL and Devnet USDC
+
+### Environment
+
+Create `.env` in the project root:
 
 ```env
 VITE_PROGRAM_ID=CQMQ2Z26ueLm7hNa2rFGADtdLhURSN9MfcUTDqCjkni4
 VITE_SOLANA_RPC_URL=https://api.devnet.solana.com
 VITE_DEVNET_USDC_MINT=4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU
-VITE_ELEVENLABS_AGENT_ID=agent_3501kr720w64f2mrb6rhhxant3dh
+VITE_ELEVENLABS_AGENT_ID=your_elevenlabs_agent_id_here
 ```
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `VITE_PROGRAM_ID` | Yes | Deployed Anchor program ID |
-| `VITE_SOLANA_RPC_URL` | No | Defaults to Devnet RPC |
-| `VITE_DEVNET_USDC_MINT` | No | Defaults to Circle Devnet USDC |
-| `VITE_ELEVENLABS_AGENT_ID` | No | Enables real ElevenLabs agent mode; falls back to simulation mode when absent |
+Do not put an ElevenLabs API key in a `VITE_` variable. Browser sessions use the public Agent ID only.
 
-Do not put an ElevenLabs API key in a `VITE_` variable. `VITE_` variables are bundled into the browser. Speak402's browser voice session uses the public ElevenLabs Agent ID.
+| Variable | Required | Notes |
+|----------|----------|-------|
+| `VITE_PROGRAM_ID` | Yes | Deployed Anchor program |
+| `VITE_SOLANA_RPC_URL` | No | Defaults to Devnet |
+| `VITE_DEVNET_USDC_MINT` | No | Circle Devnet USDC |
+| `VITE_ELEVENLABS_AGENT_ID` | No | Use your own ElevenLabs public agent ID. Absent means text simulation mode. |
+
+### Install and Run
+
+```bash
+npm install
+npm run dev
+# http://localhost:5173
+```
+
+### Getting Devnet Tokens
+
+| Token | Faucet |
+|-------|--------|
+| Devnet SOL | [faucet.solana.com](https://faucet.solana.com) |
+| Devnet USDC | [faucet.circle.com](https://faucet.circle.com) |
+
+If Devnet USDC setup is not possible, the app auto-detects and falls back to **Mock Demo Mode**. All policy logic, voice agent tools, and receipt flows still work end-to-end.
 
 ---
 
@@ -123,107 +332,84 @@ Add the same `VITE_` environment variables from `.env.example` in the Vercel pro
 
 ---
 
-## Getting Devnet USDC
+## Demo Script Under 3 Minutes
 
-To test with real Devnet USDC payments:
-
-1. **Get Devnet SOL** — Visit [faucet.solana.com](https://faucet.solana.com) and request airdrop to your wallet.
-2. **Get Devnet USDC** — Visit [faucet.circle.com](https://faucet.circle.com/) and request USDC on Solana Devnet.
-3. The app will show your wallet USDC balance in the status bar.
-4. If no USDC is detected, the Spending Policy panel shows a funding guide.
-
-If Devnet USDC setup is not possible, the app falls back to **Mock Demo Mode** (clearly labeled in the header).
-
----
-
-## Local Setup
-
-```bash
-# Install dependencies
-npm install
-
-# Start development server
-npm run dev
-```
-
-The app runs at `http://localhost:5173`.
-
----
-
-## Demo Script (Under 3 Minutes)
-
-| Time | Action |
-|------|--------|
-| 0:00 | Open app. Point out "Real Devnet USDC" badge and network indicator. |
-| 0:15 | Connect Phantom wallet. Show wallet USDC balance in status bar. |
-| 0:30 | **Create Spending Policy:** $1 per-request cap, $5 daily cap, `oracle.speak402.demo` merchant, 24h expiry. Click "Create Policy." Show the on-chain PDA. |
-| 0:50 | **Deposit USDC:** Enter 10 USDC, click Deposit. Show escrow balance update. |
-| 1:10 | **Start Voice Session.** Say or type: "List x402 services." |
-| 1:30 | Ask: "Buy the Mumbai weather risk report." Agent quotes merchant, resource, amount, and remaining allowance. |
-| 1:45 | **Confirm:** "Yes, authorize." Click Confirm & Pay if needed. |
-| 2:00 | Show on-chain tx signature in toast. Show full clickable receipt and tx links in Receipts panel. |
-| 2:15 | **Paid report unlocks:** Risk score, summary, recommended action appear. Agent reads summary aloud or text fallback shows it. |
-| 2:45 | Explain: "All policy enforcement is on-chain. No backend can override the caps." |
-
----
-
-## Testing
-
-The Solana program includes 13 passing tests:
-
-- Initialize policy succeeds
-- Deposit succeeds
-- Authorize payment succeeds within cap
-- Reject payment above per-request cap
-- Reject payment above daily cap
-- Reject wrong merchant hash
-- Reject expired policy
-- Reject revoked policy
-- Reject non-owner authorization
-- Receipt is created and can be marked fulfilled
-- Zero deposit rejected
-- Math overflow safety
-- Insufficient escrow rejected
-
----
-
-## Security Notes
-
-- **Checked arithmetic** — All on-chain math uses `checked_add`/`checked_sub` to prevent overflow.
-- **PDA authority** — Escrow vault is owned by a program-derived address; only the program can transfer out.
-- **Owner-only** — Only the policy owner can authorize payments, deposit, or revoke.
-- **Merchant restriction** — Payment is rejected if the merchant hash does not match the policy.
-- **Daily reset** — `spent_today` resets after 86400 seconds from `reset_timestamp`.
-- **Explicit confirmation** — The voice agent always reads back the full quote and waits for confirmation before preparing any transaction.
-- **No hardcoded keys** — All API keys and program IDs are loaded from environment variables.
-
----
-
-## Architecture
-
-```
-┌─────────────┐     ┌──────────────────┐     ┌───────────────────���─┐
-│  ElevenLabs │     │  React Frontend  │     │  Solana Devnet      │
-│  Voice Agent│◄───►│                  │◄───►│                     │
-│             │     │  useSpeak402()   │     │  speak402_policy    │
-│  STT / TTS  │     │  useVoiceAgent() │     │  PolicyAccount PDA  │
-└─────────────┘     │  speak402SDK.ts  │     │  EscrowVault PDA    │
-                    │                  │     │  MerchantReceipt    │
-                    │  x402 quote/pay  │     │                     │
-                    └──────────────────┘     └─────────────────────┘
-```
+| Time | Screen | Action |
+|------|--------|--------|
+| 0:00 | Landing | Point out "Real Devnet USDC" badge and program ID in README |
+| 0:10 | Landing | Click **Connect Wallet** - Phantom opens on Devnet |
+| 0:20 | Policy Setup | Show wallet USDC balance in status bar |
+| 0:30 | Policy Setup | Fill: $1.00 per-request cap, $5.00 daily cap, 24h expiry, click **Create Policy** |
+| 0:45 | Policy Setup | Show the Policy PDA address and open it in Explorer |
+| 0:55 | Policy Setup | Enter 10 USDC, click **Deposit**, show escrow balance update |
+| 1:10 | Voice Agent | Click **Start Voice Session** and allow mic permission |
+| 1:20 | Voice Agent | Say: "List x402 services" - agent reads catalog |
+| 1:35 | Voice Agent | Say: "Buy the Mumbai weather risk report" |
+| 1:45 | Voice Agent | Agent reads back merchant, resource, $0.25 USDC, and remaining $4.75 |
+| 1:55 | Voice Agent | Say: "Yes, authorize" - Phantom transaction popup appears |
+| 2:05 | Voice Agent | Approve in Phantom - on-chain tx signature appears in toast |
+| 2:15 | Paid Resource | Report unlocks: risk score, summary, recommended action |
+| 2:25 | Receipts | Navigate to Receipts tab - show fulfilled receipt + Explorer links |
+| 2:40 | Receipts | Say: "Get my receipt" - agent reads back receipt and tx |
+| 2:50 | Policy Setup | Point out: "Remaining daily allowance: 4.75 USDC - enforced on-chain, not a database" |
 
 ---
 
 ## Hackathon Qualification Checklist
 
-- [x] **Solana integration** — Anchor program deployed on Devnet with real USDC
-- [x] **ElevenLabs integration** — Conversational AI agent with STT/TTS
-- [x] **x402 payment flow** — 402 Payment Required → on-chain payment → resource unlock
-- [x] **On-chain spending policy** — Per-request cap, daily cap, merchant restriction, expiry
-- [x] **Wallet connection** — Phantom / Solana wallet adapter
-- [x] **Demo-ready** — 3-minute demo script with clear happy path
-- [x] **Open source** — Full source code with README
+- [x] **Unique Solana program** - Anchor 0.30, deployed on Devnet, written in Rust
+- [x] **Program ID in README** - `CQMQ2Z26ueLm7hNa2rFGADtdLhURSN9MfcUTDqCjkni4`
+- [x] **Public GitHub repo** - README + setup instructions
+- [x] **ElevenLabs** - Deploy Agents + STT + TTS + 5 client tools
+- [x] **x402 payment flow** - 402 quote -> on-chain payment -> resource unlock
+- [x] **Wallet connection** - Phantom / Solana wallet adapter
+- [x] **Demo video** - Under 3 minutes with clear happy path
+- [x] **Live demo link** - Vercel-ready static app
+- [x] **x402 bonus** - Multi-service catalog + real on-chain USDC payment path
+- [x] **Architecture diagram** - Mermaid in README
+
+---
+
+## Project Structure
+
+```text
+speak402/
+├── contracts/
+│   ├── programs/workspace/src/lib.rs
+│   └── tests/workspace.ts
+├── src/
+│   ├── components/
+│   │   ├── Header.tsx
+│   │   ├── SpendingPolicyPanel.tsx
+│   │   ├── VoiceAgentPanel.tsx
+│   │   ├── PaidResourcePanel.tsx
+│   │   ├── ReceiptsPanel.tsx
+│   │   └── StatusBar.tsx
+│   ├── hooks/
+│   │   ├── useSpeak402.ts
+│   │   └── useVoiceAgent.ts
+│   ├── lib/
+│   │   ├── constants.ts
+│   │   ├── speak402SDK.ts
+│   │   ├── mockProgram.ts
+│   │   ├── x402.ts
+│   │   └── types.ts
+│   ├── idl/speak402IDL.json
+│   └── pages/Index.tsx
+└── README.md
+```
+
+---
+
+## Why Solana?
+
+| Property | Why It Matters for Speak402 |
+|----------|----------------------------|
+| Sub-second finality | Voice-agent payments need instant confirmation, not slow settlement windows |
+| Low fees | Micropayments from $0.15 to $0.35 are viable without fee erosion |
+| PDA-based escrow | Wallet-owned vault enforced by program logic, not a backend permission |
+| SPL Token standard | Native Devnet USDC support, no bridging or wrapping |
+| Composability | Receipt accounts are open data; any dApp can verify fulfillment |
 
 ---
 
