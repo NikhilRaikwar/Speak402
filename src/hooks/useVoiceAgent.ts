@@ -6,7 +6,12 @@ import type {
   VoiceSessionStatus,
   X402Quote,
 } from '@/lib/types';
-import { ELEVENLABS_AGENT_ID, X402_SERVICES, formatUSDC } from '@/lib/constants';
+import {
+  ELEVENLABS_AGENT_ID,
+  ELEVENLABS_CONNECTION_TYPE,
+  X402_SERVICES,
+  formatUSDC,
+} from '@/lib/constants';
 import { fetchPaidResource, quotePaidResource } from '@/lib/x402';
 
 const SPEAK402_AGENT_PROMPT = `You are Speak402, a voice agent for Solana x402 payments.
@@ -354,7 +359,6 @@ export function useVoiceAgent(tools?: VoiceAgentTools) {
 
       if (message.source === 'user') {
         addTranscriptEntry({ role: 'user', text });
-        void handleVoiceCommand(text);
       } else if (message.source === 'ai') {
         addTranscriptEntry({ role: 'agent', text });
       }
@@ -422,7 +426,7 @@ export function useVoiceAgent(tools?: VoiceAgentTools) {
 
       await conversation.startSession({
         agentId: ELEVENLABS_AGENT_ID,
-        connectionType: 'websocket',
+        connectionType: ELEVENLABS_CONNECTION_TYPE,
         userId: `speak402-${crypto.randomUUID()}`,
         overrides: {
           agent: {
@@ -474,9 +478,13 @@ export function useVoiceAgent(tools?: VoiceAgentTools) {
   const sendSimulatedMessage = useCallback(
     (text: string) => {
       addTranscriptEntry({ role: 'user', text });
+      if (sdkSessionActiveRef.current && !textFallbackActiveRef.current) {
+        conversation.sendUserMessage(text);
+        return;
+      }
       void handleVoiceCommand(text);
     },
-    [addTranscriptEntry, handleVoiceCommand]
+    [addTranscriptEntry, conversation, handleVoiceCommand]
   );
 
   const addAgentMessage = useCallback(

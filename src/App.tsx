@@ -7,7 +7,7 @@ import { PhantomWalletAdapter } from '@solana/wallet-adapter-wallets';
 import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
 import { clusterApiUrl } from '@solana/web3.js';
 import { ConversationProvider } from '@elevenlabs/react';
-import { ELEVENLABS_AGENT_ID, SOLANA_RPC_URL } from '@/lib/constants';
+import { SOLANA_RPC_URL } from '@/lib/constants';
 import NotFound from './pages/NotFound';
 import Index from './pages/Index';
 
@@ -26,10 +26,7 @@ const App = () => {
         <ConnectionProvider endpoint={endpoint}>
             <WalletProvider wallets={wallets} autoConnect>
                 <WalletModalProvider>
-                    <ConversationProvider
-                        agentId={ELEVENLABS_AGENT_ID}
-                        connectionType="websocket"
-                    >
+                    <ConversationProvider>
                         <Routes>
                             <Route path="/" element={<Index />} />
                             <Route path="*" element={<NotFound />} />

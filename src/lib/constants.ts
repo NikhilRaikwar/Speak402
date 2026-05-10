@@ -32,6 +32,12 @@ export const MOCK_USDC_DECIMALS = DEVNET_USDC_DECIMALS;
 export const ELEVENLABS_AGENT_ID: string =
   import.meta.env.VITE_ELEVENLABS_AGENT_ID || '';
 
+const configuredElevenLabsConnectionType =
+  import.meta.env.VITE_ELEVENLABS_CONNECTION_TYPE || 'webrtc';
+
+export const ELEVENLABS_CONNECTION_TYPE: 'webrtc' | 'websocket' =
+  configuredElevenLabsConnectionType === 'websocket' ? 'websocket' : 'webrtc';
+
 // ---------------------------------------------------------------------------
 // SPL Token Program
 // ---------------------------------------------------------------------------

@@ -287,6 +287,7 @@ VITE_PROGRAM_ID=CQMQ2Z26ueLm7hNa2rFGADtdLhURSN9MfcUTDqCjkni4
 VITE_SOLANA_RPC_URL=https://api.devnet.solana.com
 VITE_DEVNET_USDC_MINT=4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU
 VITE_ELEVENLABS_AGENT_ID=your_elevenlabs_agent_id_here
+VITE_ELEVENLABS_CONNECTION_TYPE=webrtc
 ```
 
 Do not put an ElevenLabs API key in a `VITE_` variable. Browser sessions use the public Agent ID only.
@@ -297,6 +298,7 @@ Do not put an ElevenLabs API key in a `VITE_` variable. Browser sessions use the
 | `VITE_SOLANA_RPC_URL` | No | Defaults to Devnet |
 | `VITE_DEVNET_USDC_MINT` | No | Circle Devnet USDC |
 | `VITE_ELEVENLABS_AGENT_ID` | No | Use your own ElevenLabs public agent ID. Absent means text simulation mode. |
+| `VITE_ELEVENLABS_CONNECTION_TYPE` | No | Defaults to `webrtc`; set `websocket` only if your agent setup requires it. |
 
 ### Install and Run
 
